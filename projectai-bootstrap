@@ -1,0 +1,78 @@
+
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+REPO="uugoibemere-bit/ProjectAI-Repo"
+echo "================================"
+echo "     PROJECT AI BOOTSTRAP"
+echo "================================"
+
+# Check Termux
+if [ -z "${PREFIX:-}" ]; then
+    echo "This installer requires Termux."
+    exit 1
+fi
+
+# Install required tools
+pkg install gh git -y
+
+# Authenticate with GitHub
+if ! gh auth status >/dev/null 2>&1; then
+    gh auth login
+fi
+
+# Verify private repository access
+if ! gh repo view "$REPO" >/dev/null 2>&1; then
+    echo "Access denied: ask the repository owner for collaborator access."
+    exit 1
+fi
+
+# Find latest release
+TAG=$(gh release view --repo "$REPO" --json tagName --jq '.tagName')
+
+ASSET_INFO=$(gh release view "$TAG" --repo "$REPO" \
+    --json assets \
+    --jq '.assets[] | select(.name | startswith("projectai-cloud_") and endswith("_all.deb")) | [.name, .digest] | @tsv' \
+    | head -n 1)
+
+if [ -z "$ASSET_INFO" ]; then
+    echo "No Project AI package found in release."
+    exit 1
+fi
+
+IFS=$'\t' read -r ASSET DIGEST <<< "$ASSET_INFO"
+
+if [[ "$DIGEST" != sha256:* ]]; then
+    echo "Missing SHA256 release digest."
+    exit 1
+fi
+
+EXPECTED="${DIGEST#sha256:}"
+
+# Download into temporary directory
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+gh release download "$TAG" \
+    --repo "$REPO" \
+    --pattern "$ASSET" \
+    --dir "$TMP_DIR"
+
+DEB="$TMP_DIR/$ASSET"
+
+# Verify downloaded package
+ACTUAL=$(sha256sum "$DEB" | awk '{print $1}')
+
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+    echo "Checksum verification FAILED!"
+    exit 1
+fi
+
+echo "Checksum verified!"
+echo "Installing Project AI Cloud..."
+
+dpkg -i "$DEB"
+
+echo "================================"
+echo " PROJECT AI CLOUD INSTALLED!"
+echo "================================"
